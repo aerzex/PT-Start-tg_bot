@@ -1,0 +1,216 @@
+- name: Deploy Telegram Bot
+  hosts: master
+  become: true
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 86400
+      become: yes
+
+    - name: Install Git
+      apt:
+        name: git
+        state: present
+
+    - name: Clone Telegram bot repository
+      git:
+        repo: "{{all.vars.GIT_URL}}"
+        dest: "{{all.vars.WORKDIR}}"
+        force: yes
+
+    - name: Install Python and Python pip
+      apt:
+        name:
+          - python3
+          - python3-pip
+        state: present
+
+    - name: Installing Python packages
+      pip:                
+        name:
+          - python-telegram-bot==13.7
+          - paramiko
+          - psycopg2-binary
+          - python-dotenv
+          - urllib3==1.26.15
+
+- name: Configure PostgreSQL with replication for Telegram Bot
+  hosts: master
+  become: true
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Install PostgreSQL
+      apt:
+        name:
+          - postgresql-14
+          - postgresql-contrib
+          - libpq-dev
+        state: present
+        update_cache: yes
+
+    - name: Ensure PostgreSQL is started and enabled at boot
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+    
+    - name: Create oracle/pg_data/archive directory
+      file:
+        path: /oracle/pg_data/archive
+        state: directory
+
+    - name: Chown oracle directory
+      file:
+        path: /oracle/pg_data/archive/
+        owner: "{{ all.vars.DB_USER }}"
+        group: "{{ all.vars.DB_USER }}"
+        recurse: true
+
+    - name: Configure postgresql.conf
+      become_user: "{{ all.vars.DB_USER }}"
+      blockinfile:
+        path: /etc/postgresql/14/main/postgresql.conf
+        block: |
+          listen_addresses = '*'
+          port = {{ all.vars.DB_PORT }}
+          archive_mode = on
+          archive_command = 'cp %p /oracle/pg_data/archive/%f'
+          max_wal_senders=10
+          wal_level=replica
+          wal_log_hints = on
+          hot_standby=on
+          max_replication_slots=10
+          hot_standby_feedback=on
+          log_replication_commands=on
+    
+    - name: Configure pg_hba.conf 
+      become_user: "{{ all.vars.DB_USER }}"
+      blockinfile:
+        path: /etc/postgresql/14/main/pg_hba.conf
+        block: |
+         local all {{ all.vars.DB_USER }} peer
+         host all all 0.0.0.0/0 md5
+         host replication {{ all.vars.DB_REPL_USER }} {{ all.vars.DB_REPL_HOST}}/32 scram-sha-256 
+
+    - name: Restart PostgreSQL
+      service:
+        name: postgresql
+        state: restarted  
+
+    - name: create new user
+      command: psql -c "ALTER ROLE {{ all.vars.DB_USER }} PASSWORD '{{ all.vars.DB_REPL_PASSWORD }}';"
+      become: true
+      become_user: "{{ all.vars.DB_USER }}"
+       
+    - name : Create copy of init.sql
+      copy: 
+        src: init.sql
+        dest: /tmp/init.sql
+
+    - name : Change ownership of init.sql
+      file:
+        path: /tmp/init.sql
+        owner: "{{ all.vars.DB_USER }}"
+        group: "{{ all.vars.DB_USER }}"
+        mode: "0644"
+
+    - name: Change database variables in init.sql
+      replace:
+        path: /tmp/init.sql
+        regexp: "DB_DATABASE"
+        replace: "{{ all.vars.DB_DATABASE }}"
+
+    - name: Change user variables in init.sql
+      replace:
+        path: /tmp/init.sql
+        regexp: "DB_USER"
+        replace: "{{ all.vars.DB_USER }}"
+
+    - name: Change repl user variables in init.sql
+      replace:
+        path: /tmp/init.sql
+        regexp: "DB_REPL_USER"
+        replace: "{{ all.vars.DB_REPL_USER }}"
+
+    - name: Change repl password variables in init.sql
+      replace:
+        path: /tmp/init.sql
+        regexp: "DB_REPL_PASSWORD"
+        replace: "{{ all.vars.DB_REPL_PASSWORD }}"
+
+    - name: Execute init.sql
+      command: psql -a -f /tmp/init.sql
+      become: true
+      become_user: "{{ all.vars.DB_USER }}"
+
+- name: Configure PostgreSQL for slave host 
+  hosts: slave
+  become: true
+  vars_files:
+    - secrets.yml   
+
+  tasks:
+    - name: Install PostgreSQL
+      apt:
+        name:
+          - postgresql-14
+          - postgresql-contrib
+          - libpq-dev
+        state: present
+        update_cache: yes
+
+    - name: Ensure PostgreSQL is started and enabled at boot
+      service:
+        name: postgresql
+        state: started
+        enabled: yes  
+
+    - name: Stop PostgreSQL service
+      systemd:
+        name: postgresql
+        state: stopped
+
+    - name: Remove old data
+      command: rm -rf /var/lib/postgresql/14/main/
+      become: true
+      become_user: "{{ all.vars.DB_USER }}"
+      
+    - name: Initialize database replication
+      command: pg_basebackup -h {{ all.vars.DB_HOST }} -D /var/lib/postgresql/14/main/ -p {{ all.vars.DB_PORT }} -U {{ all.vars.DB_REPL_USER }} -vP -w
+      become: true
+      become_user: "{{ all.vars.DB_USER }}"
+      environment:
+        PGPASSWORD: "{{ all.vars.DB_REPL_PASSWORD }}"  
+
+    - name: change of rights
+      command: chown -R postgres:postgres /var/lib/postgresql/
+      become: true
+      become_user: "{{ all.vars.DB_USER }}"
+
+    - name: Start PostgreSQL service
+      systemd:
+        name: postgresql
+        state: started
+
+- name: Deploy Telegram Bot 
+  hosts: master
+  become: true
+
+  tasks:  
+    - name: Run Telegram Bot
+      ansible.builtin.command:
+        cmd: python3 {{ all.vars.WORKDIR }}/start.py
+      environment:
+        TOKEN: "{{ all.vars.TOKEN }}"
+        DB_HOST: "{{ all.vars.DB_HOST }}"
+        DB_USER: "{{ all.vars.DB_USER }}"
+        DB_PASSWORD: "{{ all.vars.DB_PASSWORD }}"
+        DB_DATABASE: "{{ all.vars.DB_DATABASE }}"
+        RM_HOST: "{{ all.vars.RM_HOST }}"
+        RM_PORT: "{{ all.vars.RM_PORT }}"
+        RM_USER: "{{ all.vars.RM_USER }}"
+        RM_PASSWORD: "{{ all.vars.RM_PASSWORD }}"

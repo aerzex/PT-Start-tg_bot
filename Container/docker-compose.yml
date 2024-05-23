@@ -1,0 +1,110 @@
+version: '3.8'
+
+services:
+  tg_bot:
+    build:
+      context: ./tg_bot
+      dockerfile: Dockerfile
+    container_name: tg_bot
+    environment:
+      TOKEN: ${TOKEN}   
+      DB_HOST: database  
+      DB_PORT: ${DB_PORT}  
+      DB_USER: ${DB_USER} 
+      DB_PASSWORD: ${DB_PASSWORD}  
+      DB_NAME: ${DB_DATABASE}  
+    env_file:
+      - .env
+    volumes:
+      - db-logs:/var/lib/postgresql/data/
+    depends_on:
+      - db_replication
+    networks:
+      custom_network:
+        ipv4_address:  172.34.4.1
+
+  database:
+    build:
+      context: ./database
+      args:
+        DB_REPL_USER: ${DB_REPL_USER}
+        DB_REPL_PASSWORD: ${DB_REPL_PASSWORD}
+        DB_DATABASE: ${DB_DATABASE}
+        dockerfile: Dockerfile
+    container_name: database
+    ports:
+      - "5432:5432"
+    environment:
+      DB_REPL_USER: ${DB_REPL_USER}
+      DB_REPL_PASSWORD: ${DB_REPL_PASSWORD}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_PORT: ${DB_PORT}
+      POSTGRES_USER: ${DB_USER} 
+      POSTGRES_PASSWORD: ${DB_PASSWORD}  
+      POSTGRES_DB: ${DB_DATABASE}  
+    env_file:
+      - .env
+    volumes:
+      - db-logs:/var/lib/postgresql/data/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      custom_network:
+        ipv4_address:  172.34.4.2
+
+  db_replication:
+    build:
+      context: ./db_replication
+      dockerfile: Dockerfile
+    container_name: db_replication
+    ports:
+      - "5433:5433"
+    environment:
+      DB_REPL_HOST: ${DB_REPL_HOST}
+      DB_REPL_PORT: ${DB_REPL_PORT}
+      DB_REPL_USER: ${DB_REPL_USER}
+      DB_REPL_PASSWORD: ${DB_REPL_PASSWORD}
+      DB_PORT: ${DB_PORT}
+      DB_HOST: ${DB_HOST}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_USER: ${DB_USER} 
+      POSTGRES_REPLICATION_USER: ${DB_REPL_USER} 
+      POSTGRES_REPLICATION_PASSWORD: ${DB_REPL_PASSWORD}
+    depends_on:
+      database:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - replica-data:/var/lib/postgresql/data
+    command: |
+      bash -c "
+      rm -rf /var/lib/postgresql/data
+      echo "database:5432:*:${DB_REPL_USER}:${DB_REPL_PASSWORD}" > ~/.pgpass
+      chmod 0600 ~/.pgpass
+      until pg_basebackup -R -h database -U ${DB_REPL_USER} -D /var/lib/postgresql/data -P
+      do
+      echo 'Waiting for primary to connect...'
+      sleep 1s
+      done
+      echo 'Backup done, starting replica...'
+      chmod 0700 /var/lib/postgresql/data
+      postgres
+      "
+    networks:
+      custom_network:
+        ipv4_address:  172.34.4.3
+
+volumes:
+  db-data: {}
+  replica-data: {}
+  db-logs: {}
+networks:
+  custom_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.34.0.0/16
