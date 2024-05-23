@@ -8,18 +8,6 @@
 
 
 ```bash
-# Клонирование репозитория с веткой docker
-git clone -b docker https://github.com/aerzex/PT-Start-tg_bot/
-
-# Переход в директорию проекта
-cd PT-Start-tg_bot/Container
-
-# Запуск Docker Compose
-sudo docker compose up
-=======
-
-## Клонирование репозитория с docker
-```bash
 git clone https://github.com/aerzex/PT-Start-tg_bot/
 ```
  Переход в директорию проекта
