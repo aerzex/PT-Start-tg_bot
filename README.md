@@ -18,9 +18,9 @@ cd PT-Start-tg_bot/Container
 sudo docker compose up
 =======
 
-## Клонирование репозитория с веткой docker
+## Клонирование репозитория с docker
 ```bash
-git clone -b docker https://github.com/aerzex/PT-Start-tg_bot/
+git clone https://github.com/aerzex/PT-Start-tg_bot/
 ```
  Переход в директорию проекта
 ```bash
@@ -36,7 +36,7 @@ sudo docker-compose up
 ```
 ## Клонирование репозитория и переход в директорию Ansible
 ```bas
-git clone -b ansible https://github.com/aerzex/PT-Start-tg_bot.git
+git clone https://github.com/aerzex/PT-Start-tg_bot.git
 ```
 ```bash
 cd PT-Start-tg_bot/Ansible
